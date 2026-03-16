@@ -1,0 +1,48 @@
+experiment:
+  seed: 7
+  device: "cpu"
+  output_dir: "MVA/Test_on_toy_datasets/outputs/gmm_2d_default"
+
+training:
+  hidden_dim: 256
+  batch_size: 2048
+  train_steps: 20000
+  lr: 0.001
+  log_every: 200
+  checkpoint_path: "MVA/Test_on_toy_datasets/checkpoints/gmm_2d_velocity.pt"
+  output_dir: "MVA/Test_on_toy_datasets/outputs/training_gmm_2d"
+
+gmm:
+  weights: [0.25, 0.25, 0.25, 0.25]
+  means:
+    - [-2.5, -1.5]
+    - [-1.0, 2.0]
+    - [1.8, -2.0]
+    - [2.8, 1.6]
+  covariances:
+    - [[0.50, 0.15], [0.15, 0.70]]
+    - [[0.45, -0.10], [-0.10, 0.55]]
+    - [[0.60, 0.20], [0.20, 0.40]]
+    - [[0.35, -0.08], [-0.08, 0.50]]
+
+sampling:
+  num_particles: 1500
+  num_posterior_samples: 1500
+  num_prior_plot_samples: 12000
+  num_steps: 1000
+  selected_iterations: [0, 142, 285, 428, 570, 713, 856, 999]
+
+scenarios:
+  - name: "scenario_1"
+    h: [1.5, 1.5]
+    noise_std: 0.25
+    y: 1.0
+  - name: "scenario_2"
+    h: [1.5, -1.5]
+    noise_std: 0.75
+    y: 1.0
+
+plot:
+  xlim: [-5.0, 5.0]
+  ylim: [-5.0, 5.0]
+  grid_size: 220

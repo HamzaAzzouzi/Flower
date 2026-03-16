@@ -1,0 +1,105 @@
+config:
+  experiment:
+    seed: 7
+    device: cpu
+    output_dir: MVA/Test_on_toy_datasets/outputs/gmm_2d_default
+  training:
+    hidden_dim: 256
+    batch_size: 2048
+    train_steps: 20000
+    lr: 0.001
+    log_every: 200
+    checkpoint_path: MVA/Test_on_toy_datasets/checkpoints/gmm_2d_velocity.pt
+    output_dir: MVA/Test_on_toy_datasets/outputs/training_gmm_2d
+  gmm:
+    weights:
+    - 0.25
+    - 0.25
+    - 0.25
+    - 0.25
+    means:
+    - - -2.5
+      - -1.5
+    - - -1.0
+      - 2.0
+    - - 1.8
+      - -2.0
+    - - 2.8
+      - 1.6
+    covariances:
+    - - - 0.5
+        - 0.15
+      - - 0.15
+        - 0.7
+    - - - 0.45
+        - -0.1
+      - - -0.1
+        - 0.55
+    - - - 0.6
+        - 0.2
+      - - 0.2
+        - 0.4
+    - - - 0.35
+        - -0.08
+      - - -0.08
+        - 0.5
+  sampling:
+    num_particles: 1500
+    num_posterior_samples: 1500
+    num_prior_plot_samples: 12000
+    num_steps: 1000
+    selected_iterations:
+    - 0
+    - 142
+    - 285
+    - 428
+    - 570
+    - 713
+    - 856
+    - 999
+  scenarios:
+  - name: scenario_1
+    h:
+    - 1.5
+    - 1.5
+    noise_std: 0.25
+    y: 1.0
+  - name: scenario_2
+    h:
+    - 1.5
+    - -1.5
+    noise_std: 0.75
+    y: 1.0
+  plot:
+    xlim:
+    - -5.0
+    - 5.0
+    ylim:
+    - -5.0
+    - 5.0
+    grid_size: 220
+checkpoint_path: MVA/Test_on_toy_datasets/checkpoints/gmm_2d_velocity.pt
+checkpoint_hidden_dim: 256
+scenarios:
+- name: scenario_1
+  h:
+  - 1.5
+  - 1.5
+  y: 1.0
+  sigma_n: 0.25
+  posterior_weights:
+  - 0.0003885477785403109
+  - 0.6147599672849763
+  - 0.38480860451712234
+  - 4.288041936105848e-05
+- name: scenario_2
+  h:
+  - 1.5
+  - -1.5
+  y: 1.0
+  sigma_n: 0.75
+  posterior_weights:
+  - 0.25665511428400234
+  - 0.007415308293883925
+  - 0.0031001165939215265
+  - 0.7328294608281921
