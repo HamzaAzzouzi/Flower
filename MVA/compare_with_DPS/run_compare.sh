@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Usage:
-#   bash MVA/compare_with_DPS/run_compare.sh [gpu_id] [num_images]
+#   bash MVA/compare_with_DPS/run_compare.sh [gpu_id]
 # Example:
-#   bash MVA/compare_with_DPS/run_compare.sh 0 10
+#   bash MVA/compare_with_DPS/run_compare.sh 0
 
 GPU_ID="${1:-0}"
-NUM_IMAGES="${2:-10}"
+NUM_IMAGES=2
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPARE_DIR="$ROOT_DIR/MVA/compare_with_DPS"
@@ -29,37 +29,12 @@ SPLIT_FILE="$ROOT_DIR/data_splits/400_filenames.txt"
 FLOWER_MODEL_DIR="$ROOT_DIR/model/afhq_cat/ot"
 DPS_MODEL_PATH="$DPS_DIR/models/ffhq_10m.pt"
 DEMO_IMG_DIR="$ROOT_DIR/flower_demo"
+OOD_IMAGES=("JUUL.png" "HAAMZAA.png")
 
-bootstrap_mini_testset() {
+prepare_ood_testset() {
   mkdir -p "$FLOWER_CAT_DIR"
   mkdir -p "$FLOWER_VAL_CAT_DIR"
   mkdir -p "$FLOWER_TRAIN_CAT_DIR"
-
-  ensure_train_val_from_test() {
-    local existing
-    mapfile -t existing < <(find "$FLOWER_CAT_DIR" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' \) | sort | head -n "$NUM_IMAGES")
-    if [[ "${#existing[@]}" -eq 0 ]]; then
-      return
-    fi
-    local src
-    for src in "${existing[@]}"; do
-      local base
-      base="$(basename "$src")"
-      cp -f "$src" "$FLOWER_VAL_CAT_DIR/$base"
-      cp -f "$src" "$FLOWER_TRAIN_CAT_DIR/$base"
-    done
-  }
-
-  local current_count
-  current_count=$(find "$FLOWER_CAT_DIR" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' \) | wc -l)
-  if [[ "$current_count" -ge "$NUM_IMAGES" ]]; then
-    echo "Found $current_count local AFHQ-like test images, no bootstrap needed."
-    ensure_train_val_from_test
-    return
-  fi
-
-  echo "Local AFHQ test images are missing/insufficient."
-  echo "Bootstrapping a tiny test set from flower_demo images (no full dataset download)."
 
   if [[ ! -f "$SPLIT_FILE" ]]; then
     echo "Missing split file: $SPLIT_FILE"
@@ -73,38 +48,56 @@ bootstrap_mini_testset() {
   fi
 
   mapfile -t target_names < <(head -n "$NUM_IMAGES" "$SPLIT_FILE")
-  mapfile -t source_images < <(find "$DEMO_IMG_DIR" -maxdepth 1 -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' \) | sort)
 
   if [[ "${#target_names[@]}" -eq 0 ]]; then
     echo "No target names found in $SPLIT_FILE"
     exit 1
   fi
-  if [[ "${#source_images[@]}" -eq 0 ]]; then
-    echo "No source images found in $DEMO_IMG_DIR"
+  if [[ "${#OOD_IMAGES[@]}" -ne "$NUM_IMAGES" ]]; then
+    echo "Internal configuration error: OOD image list and NUM_IMAGES mismatch"
     exit 1
   fi
 
+  echo "Preparing OOD test set with images: ${OOD_IMAGES[*]}"
+
   local idx=0
   for name in "${target_names[@]}"; do
-    src="${source_images[$((idx % ${#source_images[@]}))]}"
-    cp -f "$src" "$FLOWER_CAT_DIR/$name"
-    cp -f "$src" "$FLOWER_VAL_CAT_DIR/$name"
-    cp -f "$src" "$FLOWER_TRAIN_CAT_DIR/$name"
+    local src="$DEMO_IMG_DIR/${OOD_IMAGES[$idx]}"
+    if [[ ! -f "$src" ]]; then
+      echo "Missing required OOD image: $src"
+      exit 1
+    fi
+
+    # Keep Flower split filenames (expected by 400_filenames.txt), but overwrite contents with OOD images.
+    SRC_IMG="$src" DST_TEST="$FLOWER_CAT_DIR/$name" DST_VAL="$FLOWER_VAL_CAT_DIR/$name" DST_TRAIN="$FLOWER_TRAIN_CAT_DIR/$name" python - <<'PY'
+from PIL import Image
+import os
+
+src = os.environ["SRC_IMG"]
+dst_test = os.environ["DST_TEST"]
+dst_val = os.environ["DST_VAL"]
+dst_train = os.environ["DST_TRAIN"]
+
+img = Image.open(src).convert("RGB").resize((256, 256), Image.Resampling.LANCZOS)
+img.save(dst_test)
+img.save(dst_val)
+img.save(dst_train)
+PY
+
     idx=$((idx + 1))
   done
 
-  echo "Mini test set prepared in: $FLOWER_CAT_DIR"
-  ensure_train_val_from_test
+  echo "OOD test set prepared in: $FLOWER_CAT_DIR"
 }
 
-echo "[1/7] Checking prerequisites..."
+echo "[1/8] Checking prerequisites..."
 if [[ ! -f "$FLOWER_MODEL_DIR/model_final.pt" ]]; then
   echo "Missing Flower model: $FLOWER_MODEL_DIR/model_final.pt"
   echo "Run: bash download_models.sh"
   exit 1
 fi
 
-bootstrap_mini_testset
+prepare_ood_testset
 
 if [[ ! -f "$DPS_MODEL_PATH" ]]; then
   echo "Missing DPS checkpoint: $DPS_MODEL_PATH"
@@ -112,24 +105,27 @@ if [[ ! -f "$DPS_MODEL_PATH" ]]; then
   exit 1
 fi
 
-echo "[2/7] Building AFHQ subset with $NUM_IMAGES images..."
+echo "[2/8] Building OOD subset for DPS with $NUM_IMAGES images..."
 rm -rf "$SUBSET_DIR"
 mkdir -p "$SUBSET_DIR"
 
-mapfile -t images < <(find "$FLOWER_DATA_DIR" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' \) | sort | head -n "$NUM_IMAGES")
-if [[ "${#images[@]}" -eq 0 ]]; then
-  echo "No images found in $FLOWER_DATA_DIR"
-  exit 1
-fi
+for i in 0 1; do
+  src="$DEMO_IMG_DIR/${OOD_IMAGES[$i]}"
+  printf -v name "%05d.png" "$i"
+  SRC_IMG="$src" DST_IMG="$SUBSET_DIR/$name" python - <<'PY'
+from PIL import Image
+import os
 
-idx=0
-for src in "${images[@]}"; do
-  printf -v name "%05d.png" "$idx"
-  cp -f "$src" "$SUBSET_DIR/$name"
-  idx=$((idx + 1))
+src = os.environ["SRC_IMG"]
+dst = os.environ["DST_IMG"]
+
+# DPS FFHQ model expects 256x256 inputs.
+img = Image.open(src).convert("RGB").resize((256, 256), Image.Resampling.LANCZOS)
+img.save(dst)
+PY
 done
 
-echo "[3/7] Writing DPS task config for AFHQ subset..."
+echo "[3/8] Writing DPS task config for OOD subset..."
 cat > "$DPS_TASK_CFG" <<EOF
 conditioning:
   method: ps
@@ -151,7 +147,7 @@ measurement:
     sigma: 0.05
 EOF
 
-echo "[4/7] Running Flower (gaussian_deblurring_FFT, method=flower)..."
+echo "[4/8] Running Flower (gaussian_deblurring_FFT, method=flower)..."
 cd "$ROOT_DIR"
 python main.py --opts \
   dataset afhq_cat \
@@ -165,7 +161,8 @@ python main.py --opts \
   steps 100 \
   device cuda:"$GPU_ID"
 
-echo "[5/7] Running DPS (gaussian_blur)..."
+echo "[5/8] Running DPS (gaussian_blur)..."
+rm -rf "$DPS_SAVE_DIR/gaussian_blur"
 cd "$DPS_DIR"
 PYTHONPATH="$ROOT_DIR:${PYTHONPATH:-}" python sample_condition.py \
   --model_config configs/model_config.yaml \
@@ -174,14 +171,14 @@ PYTHONPATH="$ROOT_DIR:${PYTHONPATH:-}" python sample_condition.py \
   --gpu "$GPU_ID" \
   --save_dir "$DPS_SAVE_DIR"
 
-echo "[6/7] Evaluating DPS reconstructions..."
+echo "[6/8] Evaluating DPS reconstructions..."
 cd "$ROOT_DIR"
 python MVA/compare_with_DPS/score_dps.py \
   --label_dir "$DPS_SAVE_DIR/gaussian_blur/label" \
   --recon_dir "$DPS_SAVE_DIR/gaussian_blur/recon" \
   --output_json "$DPS_SAVE_DIR/dps_metrics.json"
 
-echo "[7/7] Aggregating Flower + DPS summary..."
+echo "[7/8] Aggregating Flower + DPS summary..."
 python MVA/compare_with_DPS/summarize_results.py \
   --flower_psnr "$FLOWER_FINAL_PSNR" \
   --flower_ssim "$FLOWER_FINAL_SSIM" \
@@ -189,4 +186,20 @@ python MVA/compare_with_DPS/summarize_results.py \
   --dps_metrics "$DPS_SAVE_DIR/dps_metrics.json" \
   --output_json "$SUMMARY_JSON"
 
+echo "[8/8] Building paired same-image outputs..."
+PAIRED_DIR="$COMPARE_DIR/results/paired"
+rm -rf "$PAIRED_DIR"
+mkdir -p "$PAIRED_DIR"
+for i in 0 1; do
+  d=$(printf "%s/%05d" "$PAIRED_DIR" "$i")
+  mkdir -p "$d"
+  cp -f "$DPS_SAVE_DIR/gaussian_blur/label/$(printf '%05d.png' "$i")" "$d/label.png"
+  cp -f "$DPS_SAVE_DIR/gaussian_blur/input/$(printf '%05d.png' "$i")" "$d/dps_input.png"
+  cp -f "$DPS_SAVE_DIR/gaussian_blur/recon/$(printf '%05d.png' "$i")" "$d/dps_recon.png"
+  cp -f "$ROOT_DIR/results/afhq_cat/ot/gaussian_deblurring_FFT/flower/test/steps=100/num_samples=1/gaussian_deblurring_FFT_flower_batch${i}_final.png" "$d/flower_recon.png"
+  cp -f "$ROOT_DIR/results/afhq_cat/ot/gaussian_deblurring_FFT/flower/test/steps=100/num_samples=1/gaussian_deblurring_FFT_noisy_batch${i}_final.png" "$d/flower_noisy.png"
+  cp -f "$ROOT_DIR/results/afhq_cat/ot/gaussian_deblurring_FFT/flower/test/steps=100/num_samples=1/gaussian_deblurring_FFT_clean_batch${i}_final.png" "$d/flower_clean.png"
+done
+
 echo "Done. Summary written to: $SUMMARY_JSON"
+echo "Paired outputs written to: $PAIRED_DIR"
